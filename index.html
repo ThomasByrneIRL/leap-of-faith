@@ -126,11 +126,11 @@ let W = 0, H = 0;
 function resize() {
   const dpr = Math.min(2, window.devicePixelRatio || 1);   // sky and HUD layers; the 3D layer sets its own
   W = innerWidth; H = innerHeight;
-  for (const [c, x] of [[cv, bgctx], [hudc, hudctx]]) {
-    c.width = W * dpr; c.height = H * dpr; c.style.width = W + 'px'; c.style.height = H + 'px';
-    x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  for (const [c, x, d] of [[cv, bgctx, 1], [hudc, hudctx, Math.min(1.5, dpr)]]) {   // soft sky at 1x is indistinguishable and much cheaper
+    c.width = W * d; c.height = H * d; c.style.width = W + 'px'; c.style.height = H + 'px';
+    x.setTransform(d, 0, 0, d, 0, 0);
   }
-  if (typeof renderer !== 'undefined' && renderer) { renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1)); renderer.setSize(W, H, false); }
+  if (typeof renderer !== 'undefined' && renderer) applyQuality();
 }
 addEventListener('resize', resize); resize();
 
@@ -634,7 +634,7 @@ function drawRopes(t) {
 
 function playerLift() {
   if (P.air) return Math.sin(Math.PI * clamp(P.airT / P.airDur, 0, 1)) * (P.mega ? 1.4 : clamp(P.airDur * 2.2, 0.6, 1.1));
-  if (P.rope) return Math.sin(Math.PI * P.rope.t) * 1.6;
+  if (P.rope) { const t = P.rope.t; return (0.55 * (1 - t) + 0.25 * t - 1.05 * Math.sin(Math.PI * t)) / 1.4; }   // swing: dips under the pivot
   return 0;
 }
 
@@ -1108,6 +1108,16 @@ function drawPlayer3D() {
 // V5: real 3D road, lighting, shadows and an animated runner (three.js)
 // =====================================================================
 var renderer = null;
+// automatic quality: drop 3D resolution when frames get slow, raise it again when there's headroom
+const Q = { scale: 1, acc: 0, n: 0 };
+function applyQuality() { renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1) * Q.scale); renderer.setSize(W, H, false); }
+function qualityTick(dt) {
+  Q.acc += dt; Q.n++;
+  if (Q.acc < 1.2) return;
+  const ft = Q.acc / Q.n; Q.acc = 0; Q.n = 0;
+  if (ft > 1 / 45 && Q.scale > 0.45) { Q.scale = Math.max(0.45, Q.scale * 0.8); applyQuality(); }
+  else if (ft < 1 / 57 && Q.scale < 1) { Q.scale = Math.min(1, Q.scale * 1.12); applyQuality(); }
+}
 const glc = document.getElementById('gl');
 renderer = new THREE.WebGLRenderer({ canvas: glc, antialias: true, alpha: true, powerPreference: 'high-performance' });
 renderer.setClearColor(0x000000, 0);
@@ -1206,7 +1216,7 @@ function getLamp(i) {
   return lampPool[i];
 }
 const fillL = new THREE.PointLight(0xc8d4ff, 0, 14, 1.2); scene.add(fillL);   // soft light from behind the camera so the runner never goes fully black
-const lampLights = [0, 1, 2, 3, 4, 5].map(() => { const l = new THREE.PointLight(0xffd9a0, 0, 9, 1.4); scene.add(l); return l; });
+const lampLights = [0, 1, 2, 3].map(() => { const l = new THREE.PointLight(0xffd9a0, 0, 9, 1.4); scene.add(l); return l; });
 const ropeMat = new THREE.MeshStandardMaterial({ color: 0xd8262b, emissive: new THREE.Color(0x6a0000), emissiveIntensity: 0.6, roughness: 0.7 });
 const ropeGeo = new THREE.CylinderGeometry(0.05, 0.05, 1, 10);
 const ringMat = new THREE.MeshBasicMaterial({ color: 0xe3342b, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false });
@@ -1288,13 +1298,17 @@ function ropePose(dt) {
   const k = ropeK * ropeK * (3 - 2 * ropeK);
   runner.updateWorldMatrix(true, true);
   const cx = runner.position.x;
-  const armDir = side => new THREE.Vector3(side * 0.16, 1, -0.12).normalize();   // up and slightly inward, gripping overhead
+  let toPivot = new THREE.Vector3(0, 1, -0.12).normalize(), swingT = 0.5;
+  if (P.rope) { toPivot = new THREE.Vector3(0, 9, -(P.rope.rp.s + 5)).sub(runner.position).normalize(); swingT = P.rope.t; }
+  const down = toPivot.clone().negate();
+  const armDir = side => toPivot.clone().add(new THREE.Vector3(side * 0.16, 0, 0)).normalize();   // reach up the rope, hands together
   for (const [arm, fore, hand] of [[bones.LArm, bones.LFore, bones.LHand], [bones.RArm, bones.RFore, bones.RHand]]) {
     arm.getWorldPosition(_a); const side = _a.x < cx ? 1 : -1;
     aimBone(arm, fore, armDir(side), k);
     aimBone(fore, hand, armDir(side * 0.5), k);
   }
-  const legDir = (back, out) => new THREE.Vector3(out, -1, back).normalize();   // legs hang, one slightly ahead of the other
+  const e = swingT * swingT * (3 - 2 * swingT), trail = 0.55 - 1.15 * e;   // legs trail behind, then kick forward
+  const legDir = (back, out) => down.clone().add(new THREE.Vector3(out, 0, back + trail)).normalize();
   bones.LUp.getWorldPosition(_a); const ls = _a.x < cx ? -1 : 1;
   aimBone(bones.LUp, bones.LLeg, legDir(-0.12, ls * 0.06), k); aimBone(bones.LLeg, bones.LFoot, legDir(0.18, ls * 0.04), k);
   aimBone(bones.RUp, bones.RLeg, legDir(0.1, -ls * 0.06), k); aimBone(bones.RLeg, bones.RFoot, legDir(0.3, -ls * 0.04), k);
@@ -1328,6 +1342,13 @@ function render3D(t) {
     runner.position.set(laneWX(P.lane), y, -P.y);
     runner.rotation.z = (P.lane - P.tl) * 0.18;   // lean into lane changes
     runner.rotation.x = P.air ? -0.12 : 0;
+    if (P.rope) {
+      const rp = P.rope.rp, up = new THREE.Vector3(0, 9, -(rp.s + 5)).sub(runner.position).normalize();
+      runner.rotation.x = Math.atan2(up.z, up.y) * 0.85;   // body lines up with the rope
+      render3D.wasRope = true;
+    } else if (render3D.wasRope) { render3D.wasRope = false; render3D.landT = t; }
+    const la = t - (render3D.landT ?? -9);
+    if (la < 0.45 && !P.rope) runner.rotation.x += 0.22 * Math.sin(la * 16) * (1 - la / 0.45);   // rock on landing
     if (runAct) {
       runAct.timeScale = P.dead ? 0 : P.rope ? 0.25 : P.air ? 0.45 : (G.state === 'play' ? curSpeed() / 6.5 : 0);
     }
@@ -1383,7 +1404,7 @@ function render3D(t) {
   }
   // light the four nearest lamps ahead of the runner
   const ahead = lampCands.filter(c => c[2] > (track ? P.y - 2 : 0)).sort((a, b) => a[2] - b[2]);
-  lampLights.forEach((pl, i) => { const c = ahead[i]; if (c && lampOn > 0.02) { pl.position.set(c[0] + c[3] * 0.6, c[1] + 2.5, -c[2]); pl.intensity = 13 * lampOn; } else pl.intensity = 0; });
+  lampLights.forEach((pl, i) => { const c = ahead[i]; if (c && lampOn > 0.02) { pl.position.set(c[0] + c[3] * 0.6, c[1] + 2.5, -c[2]); pl.intensity = 15 * lampOn; } else pl.intensity = 0; });
   for (let i = ti; i < tilePool.length; i++) tilePool[i].visible = false;
   for (let i = li; i < lampPool.length; i++) lampPool[i].visible = false;
   for (let i = ri; i < ropePool.length; i++) { ropePool[i].line.visible = false; ropePool[i].ring.visible = false; }
@@ -1393,8 +1414,11 @@ function render3D(t) {
 
 let last = performance.now(), T0 = last, runPh = 0;
 function frame(now) {
-  const dt = Math.min(0.033, (now - last) / 1000); last = now;
-  update(dt);
+  const real = Math.min(0.2, Math.max(0, (now - last) / 1000)); last = now;
+  // advance the game in real time using small steps, so a low frame rate never means slow motion
+  let rem = real; while (rem > 1e-6) { const step = Math.min(rem, 1 / 60); update(step); rem -= step; }
+  const dt = real;
+  qualityTick(real);
   musicTick();
   if (mixer) mixer.update(dt);
   touchEl.classList.toggle('hidden', !(IS_TOUCH && (G.state === 'play' || G.state === 'countdown')));
