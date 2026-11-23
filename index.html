@@ -39,18 +39,18 @@
   table.stats tr.total td { font-size:20px; font-weight:700; color:var(--gold); border-bottom:none; padding-top:10px; }
   .formula { font-size:12.5px; color:#777; margin-top:8px; line-height:1.5; }
   html,body { touch-action:none; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
-  #touch { position:fixed; left:0; right:0; bottom:0; padding:0 14px calc(56px + env(safe-area-inset-bottom)); display:flex; justify-content:space-between; align-items:center; gap:6px; }
+  #touch { position:fixed; left:0; right:0; bottom:0; padding:0 12px calc(36px + env(safe-area-inset-bottom)); display:flex; justify-content:space-between; align-items:flex-end; gap:6px; }
   #touch .grp { display:flex; gap:10px; align-items:flex-end; pointer-events:auto; }
   #touch .tb { width:min(16vw,70px); height:min(16vw,70px); flex:none; border-radius:50%; border:1.5px solid rgba(0,0,0,.15); background:rgba(17,17,17,.72); color:#fff; font:600 13px 'Space Grotesk',sans-serif; display:flex; align-items:center; justify-content:center; text-align:center; padding:0; touch-action:none; }
-  #touch .tb.arrow { width:min(19.2vw,84px); height:min(19.2vw,84px); transform:translateY(-24px); background:transparent; border:none; border-radius:0; }
+  #touch .tb.arrow { width:min(21.5vw,96px); height:min(21.5vw,96px); background:transparent; border:none; border-radius:0; }
   #touch .tb.arrow svg { width:100%; height:100%; fill:#111; filter:drop-shadow(0 2px 3px rgba(0,0,0,.25)); pointer-events:none; }
   #touch .tb.arrow.down { background:transparent; }
   #touch .tb.arrow.down svg { fill:#e3342b; }
-  #touch .tb.arrow:active { transform:translateY(-24px) scale(.96); }
-  #touch .tb.jump, #touch .tb.rope { transform:translateY(20px); }
-  #touch .tb.jump:active, #touch .tb.rope:active { transform:translateY(20px) scale(.96); }
+  #touch .tb.arrow:active { transform:scale(.96); }
+  #touch .tb.jump:active, #touch .tb.rope:active { transform:scale(.96); }
   #touch .tb.jump { width:min(20vw,92px); height:min(20vw,92px); background:rgba(17,17,17,.85); border-color:rgba(0,0,0,.3); font-size:16px; }
   #touch .tb.rope { width:min(20vw,92px); height:min(20vw,92px); font-size:16px; background:rgba(217,165,32,.9); border-color:rgba(0,0,0,.15); color:#111; }
+  #touch .tb.jump.tapped { background:rgba(227,52,43,.9); letter-spacing:3px; font-size:20px; }
   #touch .tb.down { background:rgba(227,52,43,.9); }
   #touch .col { display:flex; flex-direction:column; gap:10px; align-items:center; }
   #musicBtn { position:fixed; top:12px; right:12px; z-index:20; width:42px; height:42px; border-radius:50%; padding:0; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.82); border:1px solid rgba(0,0,0,.15); color:#111; box-shadow:0 2px 8px rgba(0,0,0,.15); }
@@ -339,7 +339,7 @@ function ropeNear() { return track.ropes.find(rp => P.y >= rp.s - 1.6 && P.y <= 
 
 // 1 tap = 2 tiles (clears 1), 2 taps = 4 (clears 3), 3 taps = 6.4 (clears 5).
 // Each jump stays in the air at least AIR_FLOOR seconds, so the tap window never shrinks with speed.
-const AIR_DIST = [0, 2, 4, 6.4], AIR_FLOOR = [0, 0.3, 0.45, 0.6];
+const AIR_DIST = [0, 2, 4, 6.4], AIR_FLOOR = [0, 0.42, 0.58, 0.72];   // time windows for the 2nd and 3rd tap
 function planAir() {
   const d = AIR_DIST[P.taps];
   const rem = Math.max(0.01, d - (P.y - P.y0));
@@ -352,12 +352,14 @@ function jump() {
   P.air = true; P.airT = 0; P.y0 = P.y; P.coy = 0; P.hold = 0;
   planAir();
   sfx.jump(false);
+  flashJump(1);
 }
 function extraTap() {
   P.taps += 1;
   P.mega = P.taps === 3;
   planAir();
   beep(P.taps === 2 ? 480 : 640, 0.16, 'sine', 0.06, 300);
+  flashJump(P.taps);
 }
 function tryRope() {
   if (P.rope || P.dead || !(P.air || P.coy > 0)) return;
@@ -365,12 +367,20 @@ function tryRope() {
   P.rope = { y0: P.y, y1: rp.e + 1.5, t: 0, rp }; P.air = false; P.charging = false; P.coy = 0;
   sfx.rope();
 }
+let jumpBtn = null, jumpFlashT = 0;
+function flashJump(n) {   // the JUMP button shows one, two or three dots as taps register
+  jumpBtn = jumpBtn || document.querySelector('#touch .tb.jump');
+  if (!jumpBtn) return;
+  jumpBtn.textContent = '\u25CF'.repeat(n);
+  jumpBtn.classList.remove('tapped'); void jumpBtn.offsetWidth; jumpBtn.classList.add('tapped');
+  clearTimeout(jumpFlashT); jumpFlashT = setTimeout(() => { jumpBtn.textContent = 'JUMP'; jumpBtn.classList.remove('tapped'); }, 450);
+}
 function land() {
   const r = Math.floor(P.y), l = Math.round(P.lane);
   if (!solidAt(r, l)) { die(); return; }
   sfx.land();
   P.reveal.push({ r, l, t: 0.6 });
-
+  if (P.buffer > 0) { P.buffer = 0; jump(); }   // tap came just before touchdown
 }
 function die() { if (P.dead) return; P.deathAt = { y: P.y, lane: P.lane }; P.dead = true; P.deadT = 0; P.charging = false; sfx.die(); }
 
@@ -389,6 +399,7 @@ function onDown(e) {
   if (e.code === 'Space' && first) {
     if (!P.air && !P.rope) jump();
     else if (P.air && P.taps < 3) extraTap();
+    else if (P.air) P.buffer = 0.15;   // after a full triple, an extra tap is saved for the moment you land
   }
   if ((e.code === 'Enter' || e.code === 'NumpadEnter') && first) tryRope();
 }
@@ -402,7 +413,7 @@ const IS_TOUCH = ('ontouchstart' in window) || (window.matchMedia && matchMedia(
 const touchEl = document.getElementById('touch');
 touchEl.querySelectorAll('.tb').forEach(b => {
   const code = b.dataset.code;
-  const down = ev => { ev.preventDefault(); b.classList.add('down'); try { b.setPointerCapture(ev.pointerId); } catch (x) {} onDown({ code, preventDefault() {} }); };
+  const down = ev => { ev.preventDefault(); keys[code] = false; b.classList.add('down'); try { b.setPointerCapture(ev.pointerId); } catch (x) {} onDown({ code, preventDefault() {} }); };
   const up = ev => { ev.preventDefault(); if (!keys[code]) return; b.classList.remove('down'); onUp({ code }); };
   b.addEventListener('pointerdown', down);
   b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); b.addEventListener('lostpointercapture', up);
