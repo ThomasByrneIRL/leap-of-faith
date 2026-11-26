@@ -28,6 +28,7 @@
   .pad.hit { transform:scale(.95); }
   #touch .tb.jump.big { width:min(31vw,136px); height:min(31vw,136px); font-size:22px; }
   #touch .tb.jump.perfect { background:rgba(217,165,32,.95); }
+  #touch.flow .tb.jump { display:none; }
   .overlay { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(243,243,240,.6); backdrop-filter:blur(3px); }
   .hidden { display:none !important; }
   #result { background:rgba(243,243,240,.2); backdrop-filter:none; align-items:flex-end; padding-bottom:4vh; }
@@ -88,11 +89,11 @@
     <p class="sub" style="font-size:clamp(13px,4vw,18px);font-weight:600;color:#111;letter-spacing:.3px;white-space:nowrap;margin-bottom:12px">MUSIC MODE</p>
     <ul class="howto" style="margin-bottom:12px">
       <li>Tap <b>&lt;</b> or <b>&gt;</b> to change lane</li>
-      <li>Tap <b>TAP</b> as you cross a glowing tile in your lane</li>
+      <li id="howTap">Tap <b>TAP</b> as you cross a glowing tile in your lane</li>
       <li>Quiet parts of the song are free running</li>
-      <li>Three misses and the road gives way. Hits win health back</li>
+      <li id="howHealth">Three misses and the road gives way. Hits win health back</li>
     </ul>
-    <div class="seg" id="diffSeg"><button data-d="easy">Easy</button><button data-d="normal">Normal</button><button data-d="hard">Hard</button></div>
+    <div class="seg" id="diffSeg"><button data-d="easy">Easy</button><button data-d="normal">Normal</button><button data-d="hard">Hard</button><button data-d="flow">Flow</button></div>
     <div class="modes songs" style="grid-template-columns:1fr;gap:8px;margin-bottom:10px">
       <button id="btnBuiltin"><b>Play: Darkness Road</b><small>MintoDog · built in</small></button>
       <button id="btnFile"><b>Play your own song</b><small>Pick a music file on this device</small></button>
@@ -367,7 +368,8 @@ async function analyseSong(buf) {
 const DIFF = {
   easy:   { label: 'Easy',   sub: 1, gap: 2,   q: 0.35, win: [0.07, 0.15] },
   normal: { label: 'Normal', sub: 2, gap: 1,   q: 0.25, win: [0.055, 0.12] },
-  hard:   { label: 'Hard',   sub: 2, gap: 0.5, q: 0.15, win: [0.045, 0.10] }
+  hard:   { label: 'Hard',   sub: 2, gap: 0.5, q: 0.15, win: [0.045, 0.10] },
+  flow:   { label: 'Flow',   sub: 2, gap: 0,   q: 0.1,  win: [0.07, 0.07], flow: true, speed: 11 }   // no TAP: steer onto every tile, dodge the dark ones
 };
 // free-running sections: the stretches of the song with the least percussion (held notes, pads, breakdowns)
 function findRopes(an) {
@@ -393,6 +395,7 @@ function findRopes(an) {
 function makeChart(an, diff) {
   const D = DIFF[diff], B = an.beat, sub = D.sub === 1 ? 1 : an.sub, step = B / sub;
   const holds = findRopes(an);
+  if (D.flow) return makeFlowChart(an, holds, step);
   const nearRope = t => holds.some(h => t > h.t - B * Math.max(1, D.gap) - 0.05 && t < h.end + B * 0.75);
   // snap every onset to the nearest grid point; keep the strongest per point
   const slots = new Map();
@@ -422,10 +425,50 @@ function makeChart(an, diff) {
   return { notes, holds, win: D.win };
 }
 
+// Flow chart: every onset that fits the grid, a lane change on every tile, and dark tiles to dodge
+function makeFlowChart(an, holds, step) {
+  const B = an.beat, D = DIFF.flow;
+  const nearRest = t => holds.some(h => t > h.t - B - 0.05 && t < h.end + B * 0.75);
+  const slots = new Map();
+  for (const p of an.peaks) {
+    const g = Math.round((p.t - an.beat0) / step), tg = an.beat0 + g * step;
+    if (Math.abs(p.t - tg) > step * 0.3) continue;
+    const sc = p.s * (g % an.sub === 0 ? 1.25 : 1);
+    const cur = slots.get(g); if (!cur || sc > cur.s) slots.set(g, { t: tg, s: sc, br: p.br });
+  }
+  let cands = [...slots.values()].filter(c => c.t > 1.5 && c.t < an.dur - 1.5 && !nearRest(c.t));
+  const thr = pct(cands.map(c => c.s), D.q);
+  cands = cands.filter(c => c.s >= thr).sort((x, y) => y.s - x.s);
+  const taken = [], minGap = Math.max(step, 0.2) - 1e-3;
+  for (const c of cands) if (taken.every(o => Math.abs(o.t - c.t) >= minGap)) taken.push(c);
+  taken.sort((x, y) => x.t - y.t);
+  const brs = taken.map(c => c.br).sort((x, y) => x - y), c1 = brs[Math.floor(brs.length / 3)] || 0.6, c2 = brs[Math.floor(brs.length * 2 / 3)] || 1.3;
+  const notes = []; let prev = null, zig = 0;
+  for (const c of taken) {
+    let lane = c.br < c1 ? 0 : c.br < c2 ? 1 : 2;
+    if (prev) {
+      if (lane === prev.lane) lane = prev.lane === 1 ? ((zig ^= 1) ? 0 : 2) : 1;   // always move
+      if (Math.abs(lane - prev.lane) === 2 && c.t - prev.t < 0.3) lane = 1;      // full-width jumps only when there's time
+    }
+    const nt = { t: c.t, lane }; notes.push(nt); prev = nt;
+  }
+  // dark tiles: off the path between two tiles, so they can always be dodged
+  const avoid = []; let k = 0;
+  for (let i = 0; i + 1 < notes.length; i++) {
+    const a = notes[i], b = notes[i + 1];
+    if (b.t - a.t < 2 * step - 1e-3) continue;
+    const la = [0, 1, 2].find(l => l < Math.min(a.lane, b.lane) || l > Math.max(a.lane, b.lane));
+    if (la === undefined || (k++ % 2)) continue;
+    avoid.push({ t: a.t + Math.round((b.t - a.t) / 2 / step) * step, lane: la, avoid: true });
+  }
+  return { notes: notes.concat(avoid).sort((x, y) => x.t - y.t), holds, win: D.win, flow: true };
+}
+
 // ---------- game state ----------
 const keys = {};
 let track = null, G = { state: 'menu' }, P = {}, camY = 0;
-const SPEED = 9, LEAD = 3.2, Y0 = 2.5 + LEAD * SPEED;   // road sections per second; lead-in before the song
+const LEAD = 3.2; let SPEED = 9, Y0 = 2.5 + LEAD * SPEED;   // road sections per second; lead-in before the song
+function setSpeed(v) { SPEED = v; Y0 = 2.5 + LEAD * SPEED; }
 const yAt = t => Y0 + SPEED * t;
 function curSpeed() { return SPEED; }
 function sprinting() { return false; }
@@ -449,10 +492,12 @@ function startSong(off) {
   const a = ac(); if (!a || !Song.buf || !Song.an) return;
   unlockAudio();
   const ch = Song.charts[curDiff] || (Song.charts[curDiff] = makeChart(Song.an, curDiff));
-  const notes = ch.notes.map(n => ({ t: n.t, lane: n.lane })), holds = ch.holds.map(h => ({ t: h.t, end: h.end }));
+  const notes = ch.notes.map(n => ({ t: n.t, lane: n.lane, avoid: !!n.avoid })), holds = ch.holds.map(h => ({ t: h.t, end: h.end }));
+  setSpeed(DIFF[curDiff].speed || 9);
   track = buildTrack(holds, Song.buf.duration);
+  touchEl.classList.toggle('flow', !!ch.flow);
   P = newPlayer();
-  G = { mode: 'music', state: 'countdown', diff: curDiff, win: ch.win, notes, holds, ni: 0, score: 0, combo: 0, maxCombo: 0, health: 3, streak: 0,
+  G = { mode: 'music', state: 'countdown', diff: curDiff, win: ch.win, flow: !!ch.flow, notes, holds, ni: 0, score: 0, combo: 0, maxCombo: 0, health: 3, streak: 0,
         counts: { perfect: 0, good: 0, miss: 0 }, popups: [], pend: null, calib: load('calibMs', 0) / 1000, lastCd: 4, songT: -LEAD };
   stopSong();
   const src = a.createBufferSource(), g = a.createGain();
@@ -480,7 +525,7 @@ function scoreHit(kind) {
   G.score += Math.round((kind === 'perfect' ? 300 : 100) * mult());
   addPopup(kind === 'perfect' ? 'PERFECT' : 'GOOD', kind === 'perfect' ? '#ffd34d' : '#ffffff');
   G.streak++;
-  if (G.streak >= 8) { G.streak = 0; if (G.health < 3) { G.health++; addPopup('+1 HEALTH', '#7fe08a'); } }
+  if (G.streak >= 8 && !G.flow) { G.streak = 0; if (G.health < 3) { G.health++; addPopup('+1 HEALTH', '#7fe08a'); } }
   flashTap(kind);
 }
 function takeMiss() {
@@ -493,6 +538,12 @@ function judge(n, kind) {
   if (kind === 'miss') { track.crumbled.set(Math.floor(yAt(n.t)) * 3 + n.lane, performance.now()); takeMiss(); }
   else scoreHit(kind);
 }
+function flowHit(n) {
+  n.state = 'perfect'; n.at = performance.now();
+  G.counts.perfect++; G.combo++; G.maxCombo = Math.max(G.maxCombo, G.combo);
+  G.score += Math.round(200 * mult());
+  if (G.combo % 25 === 0) addPopup(G.combo + ' COMBO', '#ffd34d');
+}
 function fall() {
   P.dead = true; P.deadT = 0;
   const r0 = Math.floor(P.y), now = performance.now();
@@ -501,6 +552,7 @@ function fall() {
   sfx.die(); stopSong(true);
 }
 function tapAt(ts) {
+  if (G.flow) return;   // Flow has no TAP
   const jt = heardAt(ts) - Song.startCtx - G.calib, W = G.win;
   let best = null, bd = 1e9;
   for (let i = G.ni; i < G.notes.length; i++) {
@@ -558,8 +610,16 @@ function update(dt) {
   const dl = P.tl - P.lane; P.lane += Math.sign(dl) * Math.min(Math.abs(dl), 12 * dt);
   const cs = st - G.calib, W = G.win;
   if (G.pend && (G.pend.n.state || performance.now() > G.pend.until)) G.pend = null;
-  for (let i = G.ni; i < G.notes.length; i++) {
-    const n = G.notes[i]; if (n.t + W[1] >= cs) break;
+  if (G.flow) {   // a hit is being in the tile's lane as you cross it; touching a dark tile is a miss
+    const lane = Math.round(P.lane), FW = W[1];
+    for (let i = G.ni; i < G.notes.length; i++) {
+      const n = G.notes[i]; if (n.t - FW > st) break; if (n.state) continue;
+      if (n.avoid) { if (st >= n.t) { if (lane === n.lane) { judge(n, 'miss'); if (P.dead) return; } else n.state = 'avoided'; } continue; }
+      if (lane === n.lane) { flowHit(n); continue; }
+      if (st > n.t + FW) { judge(n, 'miss'); if (P.dead) return; }
+    }
+  } else for (let i = G.ni; i < G.notes.length; i++) {
+    const n = G.notes[i]; if (n.t + W[1] + 0.1 >= cs) break;   // small grace so a tap handled late (slow frame) is still judged by its own timestamp
     if (!n.state) { judge(n, 'miss'); if (P.dead) return; }
   }
   while (G.ni < G.notes.length && G.notes[G.ni].state) G.ni++;
@@ -572,7 +632,7 @@ function endRun(cleared) {
   if (G.state === 'result') return;
   G.state = 'result';
   if (cleared) stopSong(true);
-  const c = G.counts, tot = c.perfect + c.good + c.miss, acc = tot ? (c.perfect + 0.6 * c.good) / tot : 0;
+  const c = G.counts, tot = c.perfect + c.good + c.miss, acc = tot ? (c.perfect + 0.6 * c.good) / tot : 0;   // Flow: every hit is full marks
   const grade = acc >= 0.95 ? 'S' : acc >= 0.88 ? 'A' : acc >= 0.75 ? 'B' : acc >= 0.6 ? 'C' : 'D';
   const key = 'best:' + Song.key + ':' + G.diff, best = Math.max(load(key, 0), G.score); save(key, best);
   const pctDone = Math.round(clamp(G.songT / Song.buf.duration, 0, 1) * 100);
@@ -584,7 +644,7 @@ function endRun(cleared) {
     <tr><td>Score</td><td>${G.score.toLocaleString('en-IE')}</td></tr>
     ${cleared ? '' : `<tr><td>Made it</td><td>${pctDone}% of the song</td></tr>`}
     <tr><td>Accuracy</td><td>${Math.round(acc * 100)}%</td></tr>
-    <tr><td>Perfect · Good · Miss</td><td>${c.perfect} · ${c.good} · ${c.miss}</td></tr>
+    ${G.flow ? `<tr><td>Hits · Misses</td><td>${c.perfect} · ${c.miss}</td></tr>` : `<tr><td>Perfect · Good · Miss</td><td>${c.perfect} · ${c.good} · ${c.miss}</td></tr>`}
     <tr><td>Best combo</td><td>${G.maxCombo}</td></tr>
     <tr class="total"><td>Best (${DIFF[G.diff].label})</td><td>${best.toLocaleString('en-IE')}</td></tr></table>`;
   btn('Change Song', showMenu); btn('Go Again', startSong, true);
@@ -650,6 +710,8 @@ function updateMenuStats() {
   $('calibVal').textContent = (ms > 0 ? '+' : '') + ms + ' ms';
   $('menuStats').textContent = `Best on Darkness Road (${DIFF[curDiff].label}): ${load('best:builtin:' + curDiff, 0).toLocaleString('en-IE')}`;
   document.querySelectorAll('#diffSeg button').forEach(b => b.classList.toggle('on', b.dataset.d === curDiff));
+  $('howHealth').textContent = curDiff === 'flow' ? 'Three misses and the road gives way. No health back in Flow' : 'Three misses and the road gives way. Hits win health back';
+  $('howTap').innerHTML = curDiff === 'flow' ? '<b>Flow:</b> no TAP. Steer onto every glowing tile and keep off the dark ones' : 'Tap <b>TAP</b> as you cross a glowing tile in your lane';
 }
 function showMenu() {
   stopSong(); Cal.running = false;
@@ -1582,13 +1644,15 @@ function render3D(t) {
       if (z > P.y + buildDist()) break;
       if (z < camY - CAM_BACK - 1) continue;
       let y = 0.03, sc = 1, op = 1, col = 0xe3342b, ei = 1;
-      if (!n.state) { op = clamp((P.y + buildDist() - z) / 1.5, 0, 1); ei = 0.9 + 0.5 * Math.sin(t * 10); }
+      if (n.avoid && (!n.state || n.state === 'avoided')) { col = 0x0c0c0e; ei = 0; op = clamp((P.y + buildDist() - z) / 1.5, 0, 1); }
+      else if (!n.state) { op = clamp((P.y + buildDist() - z) / 1.5, 0, 1); ei = 0.9 + 0.5 * Math.sin(t * 10); }
       else if (n.state === 'miss' || n.state === 'lost') { const k = (now - n.at) / 1000; y -= k * k * 8; col = 0x3a1a18; ei = 0; op = Math.max(0, 1 - k * 1.5); }
-      else { const k = (now - n.at) / 1000; sc = 1 + k * 3; y += k * 0.6; op = Math.max(0, 1 - k / 0.3); col = n.state === 'perfect' ? 0xffd34d : 0xffffff; ei = 2; }
+      else { const k = (now - n.at) / 1000; sc = 1 + k * 1.2; y += k * 0.6; op = Math.max(0, 1 - k / 0.3); col = n.state === 'perfect' ? 0xffd34d : 0xffffff; ei = 2; }
       if (op <= 0.01) continue;
       const M = getNote(ni3++);
       M.visible = true; M.material.color.setHex(col); M.material.emissive.setHex(col); M.material.emissiveIntensity = ei; M.material.opacity = op;
-      M.position.set(laneWX(n.lane), y, -z); M.scale.set(sc, 1, sc);
+      if (n.avoid && n.state !== 'miss') { M.position.set(laneWX(n.lane), y + 0.1, -z); M.scale.set(1, 5, 1.2); }   // dark tiles stand up off the road like blocks
+      else { M.position.set(laneWX(n.lane), y, -z); M.scale.set(sc, 1, sc); }
     }
   }
   for (let i = ni3; i < notePool.length; i++) notePool[i].visible = false;
