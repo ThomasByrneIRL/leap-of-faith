@@ -13,6 +13,10 @@
   canvas { display:block; position:fixed; left:0; top:0; }
   #gl { z-index:1; pointer-events:none; } #hud { z-index:2; pointer-events:none; }
   .overlay { z-index:10; } #touch { z-index:5; }
+  .howto { list-style:none; margin:4px auto 16px; padding:0; max-width:320px; text-align:left; font-size:13px; line-height:1.5; color:#333; }
+  .howto li { padding:3px 0; border-bottom:1px solid rgba(0,0,0,.06); }
+  .howto li:last-child { border-bottom:none; }
+  .howto b { font-weight:700; color:#111; }
   .overlay { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(243,243,240,.6); backdrop-filter:blur(3px); }
   .hidden { display:none !important; }
   #result { background:rgba(243,243,240,.2); backdrop-filter:none; align-items:flex-end; padding-bottom:4vh; }
@@ -70,7 +74,17 @@
 <div id="menu" class="overlay">
   <div class="card" style="text-align:center">
     <h1>Leap of <span>Faith</span></h1>
-    <p class="sub" style="font-size:18px;font-weight:600;color:#111;letter-spacing:.3px">Run &gt; Jump &gt; Swing &gt; Survive</p>
+    <p class="sub" style="font-size:clamp(13px,4vw,18px);font-weight:600;color:#111;letter-spacing:.3px;white-space:nowrap">RUN &gt; JUMP &gt; SWING &gt; SURVIVE</p>
+    <ul class="howto">
+      <li>Tap <b>&lt;</b> to move left</li>
+      <li>Tap <b>&gt;</b> to move right</li>
+      <li>Tap <b>JUMP</b> once for a small jump</li>
+      <li>Tap <b>JUMP</b> twice for a double jump</li>
+      <li>Tap <b>JUMP</b> three times for a mega jump</li>
+      <li>Tap <b>JUMP</b> + <b>&lt;</b> or <b>&gt;</b> to move left or right in the air</li>
+      <li>Tap <b>ROPE</b> in the circle to catch the rope and swing</li>
+      <li>Tap <b>JUMP</b> + <b>ROPE</b> to jump and swing on the rope</li>
+    </ul>
     <div class="modes" style="grid-template-columns:1fr">
       <button id="btnSurvival" style="text-align:center"><b style="margin:0;font-size:20px">Play</b></button>
       <button id="btnLeap" class="hidden"><b>Flying Blind</b><small>Today's daily track. Watch it once, then run it blind from memory.</small></button>
@@ -497,7 +511,7 @@ function endRun(won) {
     const best = Math.max(load('survivalBest', 0), dist); save('survivalBest', best);
     title.textContent = 'YOU’RE DEAD!!! 😵 ⚰️ 🪦';
     body.innerHTML = `<table class="stats"><tr><td>Distance</td><td>${dist} m</td></tr><tr><td>Time alive</td><td>${G.t.toFixed(1)} s</td></tr><tr class="total"><td>Best</td><td>${best} m</td></tr></table>`;
-    btn('Menu', showMenu); btn('Run again (Enter)', startSurvival, true);
+    btn('Go Again', startSurvival, true);
   } else {
     const s = lofStats();
     const pct = Math.min(100, Math.floor((P.y - 2.5) / (track.finish - 2.5) * 100));
