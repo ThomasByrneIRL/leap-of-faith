@@ -594,6 +594,13 @@ touchEl.querySelectorAll('.tb').forEach(b => {
   b.addEventListener('contextmenu', ev => ev.preventDefault());
 });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+// Flow: tap anywhere on the left or right half of the screen to change lane, not just on the arrows
+addEventListener('pointerdown', ev => {
+  if (!G.flow || !(G.state === 'play' || G.state === 'countdown') || P.dead) return;
+  if (ev.target.closest && ev.target.closest('button')) return;   // the arrow buttons handle themselves
+  ev.preventDefault();
+  onDown({ code: ev.clientX < innerWidth / 2 ? 'ArrowLeft' : 'ArrowRight', preventDefault() {}, timeStamp: ev.timeStamp });
+}, { passive: false });
 
 // ---------- update ----------
 function update(dt) {
@@ -607,11 +614,11 @@ function update(dt) {
   }
   if (P.dead) { P.deadT += dt; if (P.deadT > 1.2) endRun(false); return; }
   P.y = yAt(st); camY = P.y;
-  const dl = P.tl - P.lane; P.lane += Math.sign(dl) * Math.min(Math.abs(dl), 12 * dt);
+  const dl = P.tl - P.lane; P.lane += Math.sign(dl) * Math.min(Math.abs(dl), 20 * dt);   // quick side-step: 50 ms a lane
   const cs = st - G.calib, W = G.win;
   if (G.pend && (G.pend.n.state || performance.now() > G.pend.until)) G.pend = null;
   if (G.flow) {   // a hit is being in the tile's lane as you cross it; touching a dark tile is a miss
-    const lane = Math.round(P.lane), FW = W[1];
+    const lane = P.tl, FW = W[1];   // judge the lane you've chosen, the instant you press, not where the animation has got to
     for (let i = G.ni; i < G.notes.length; i++) {
       const n = G.notes[i]; if (n.t - FW > st) break; if (n.state) continue;
       if (n.avoid) { if (st >= n.t) { if (lane === n.lane) { judge(n, 'miss'); if (P.dead) return; } else n.state = 'avoided'; } continue; }
@@ -711,7 +718,7 @@ function updateMenuStats() {
   $('menuStats').textContent = `Best on Darkness Road (${DIFF[curDiff].label}): ${load('best:builtin:' + curDiff, 0).toLocaleString('en-IE')}`;
   document.querySelectorAll('#diffSeg button').forEach(b => b.classList.toggle('on', b.dataset.d === curDiff));
   $('howHealth').textContent = curDiff === 'flow' ? 'Three misses and the road gives way. No health back in Flow' : 'Three misses and the road gives way. Hits win health back';
-  $('howTap').innerHTML = curDiff === 'flow' ? '<b>Flow:</b> no TAP. Steer onto every glowing tile and keep off the dark ones' : 'Tap <b>TAP</b> as you cross a glowing tile in your lane';
+  $('howTap').innerHTML = curDiff === 'flow' ? '<b>Flow:</b> no TAP. Steer onto every glowing tile, keep off the dark ones. Tap either side of the screen to move' : 'Tap <b>TAP</b> as you cross a glowing tile in your lane';
 }
 function showMenu() {
   stopSong(); Cal.running = false;
