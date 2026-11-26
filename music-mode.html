@@ -26,6 +26,7 @@
   .pad { width:150px; height:150px; border-radius:50%; margin:6px auto 12px; display:flex; align-items:center; justify-content:center; font-size:24px; font-weight:700; background:#111; color:#fff; border:none; text-align:center; touch-action:none; transition:background .05s; }
   .pad.beat { background:#e3342b; }
   .pad.hit { transform:scale(.95); }
+  #touch .tb.jump.big { width:min(31vw,136px); height:min(31vw,136px); font-size:22px; }
   #touch .tb.jump.perfect { background:rgba(217,165,32,.95); }
   .overlay { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(243,243,240,.6); backdrop-filter:blur(3px); }
   .hidden { display:none !important; }
@@ -88,7 +89,7 @@
     <ul class="howto" style="margin-bottom:12px">
       <li>Tap <b>&lt;</b> or <b>&gt;</b> to change lane</li>
       <li>Tap <b>TAP</b> as you cross a glowing tile in your lane</li>
-      <li>Hold <b>ROPE</b> from the circle to the far side of the gap</li>
+      <li>Quiet parts of the song are free running</li>
       <li>Three misses and the road gives way. Hits win health back</li>
     </ul>
     <div class="seg" id="diffSeg"><button data-d="easy">Easy</button><button data-d="normal">Normal</button><button data-d="hard">Hard</button></div>
@@ -105,8 +106,7 @@
 
 <div id="touch" class="hidden">
   <button class="tb arrow" data-code="ArrowLeft" aria-label="Left"><svg viewBox="0 0 100 100"><polygon points="6,50 94,0 94,100"/></svg></button>
-  <button class="tb rope" data-code="Enter">ROPE</button>
-  <button class="tb jump" data-code="Space">TAP</button>
+  <button class="tb jump big" data-code="Space">TAP</button>
   <button class="tb arrow" data-code="ArrowRight" aria-label="Right"><svg viewBox="0 0 100 100"><polygon points="94,50 6,0 6,100"/></svg></button>
 </div>
 
@@ -369,7 +369,7 @@ const DIFF = {
   normal: { label: 'Normal', sub: 2, gap: 1,   q: 0.25, win: [0.055, 0.12] },
   hard:   { label: 'Hard',   sub: 2, gap: 0.5, q: 0.15, win: [0.045, 0.10] }
 };
-// rope sections: the stretches of the song with the least percussion (held notes, pads, breakdowns)
+// free-running sections: the stretches of the song with the least percussion (held notes, pads, breakdowns)
 function findRopes(an) {
   const B = an.beat, beats = [];
   for (let t = an.beat0; t < an.dur; t += B) beats.push(t);
@@ -434,13 +434,7 @@ function newPlayer() { return { y: 2.5, lane: 1, tl: 1, air: false, taps: 0, meg
 function buildTrack(holds, dur) {
   const T = { rows: [], ropes: [], crumbled: new Map(), finish: Math.ceil(yAt(dur + 1)) };
   for (let r = 0; r < T.finish + 40; r++) T.rows.push({ m: [1, 1, 1], cr: [0, 0, 0] });
-  for (const h of holds) {
-    const s = yAt(h.t), e = yAt(h.end);
-    const rp = { s, e, pz: (s + e) / 2, py: Math.max(9, (e - s) * 0.55), hold: h };
-    T.ropes.push(rp);
-    for (let r = Math.ceil(s + 0.6); r + 1 <= Math.floor(e - 0.4); r++) T.rows[r].m = [0, 0, 0];   // the gap the rope carries you over
-  }
-  return T;
+  return T;   // the quietest stretches of the song have no tiles: free running
 }
 let curDiff = load('diff', 'normal'); if (!DIFF[curDiff]) curDiff = 'normal';
 
@@ -464,7 +458,7 @@ function startSong(off) {
   const src = a.createBufferSource(), g = a.createGain();
   src.buffer = Song.buf; g.gain.value = 0.9; src.connect(g).connect(a.destination);
   Song.startCtx = a.currentTime + LEAD - off; src.start(a.currentTime + LEAD, off);
-  if (off) { for (const n of notes) if (n.t < off + 0.3) n.state = 'skip'; for (const h of holds) if (h.t < off + 0.3) h.state = 'skip'; }
+  if (off) { for (const n of notes) if (n.t < off + 0.3) n.state = 'skip'; }
   Song.src = src; Song.gain = g;
   clockTick(true);
   P.y = yAt(songNow()); camY = P.y;
@@ -519,14 +513,6 @@ function tapAt(ts) {
   else G.pend = { n: best, kind, until: performance.now() + 110 };   // grace if the lane change lands a moment after the tap
 }
 function laneChanged() { if (G.pend && !G.pend.n.state && P.tl === G.pend.n.lane) { judge(G.pend.n, G.pend.kind); G.pend = null; } }
-function ropeAt(ts) {
-  const jt = heardAt(ts) - Song.startCtx - G.calib, W = G.win;
-  for (const rp of track.ropes) {
-    const h = rp.hold; if (h.state) continue;
-    const d = Math.abs(h.t - jt);
-    if (d <= W[1] * 1.5) { h.state = 'held'; scoreHit(d <= W[0] * 1.5 ? 'perfect' : 'good'); sfx.rope(); return; }
-  }
-}
 
 // ---------- input ----------
 function onDown(e) {
@@ -540,8 +526,7 @@ function onDown(e) {
   if (!(G.state === 'play' || G.state === 'countdown') || P.dead) return;
   if (e.code === 'ArrowLeft' || e.code === 'KeyA') { P.tl = Math.max(0, P.tl - 1); laneChanged(); }
   if (e.code === 'ArrowRight' || e.code === 'KeyD') { P.tl = Math.min(2, P.tl + 1); laneChanged(); }
-  if (e.code === 'Space' && first) tapAt(ts);
-  if ((e.code === 'Enter' || e.code === 'NumpadEnter') && first) ropeAt(ts);
+  if ((e.code === 'Space' || e.code === 'Enter' || e.code === 'NumpadEnter') && first) tapAt(ts);
 }
 addEventListener('keydown', onDown);
 function onUp(e) { keys[e.code] = false; }
@@ -579,14 +564,6 @@ function update(dt) {
   }
   while (G.ni < G.notes.length && G.notes[G.ni].state) G.ni++;
   P.rope = null;
-  const holding = keys.Enter || keys.NumpadEnter;
-  for (const rp of track.ropes) {
-    const h = rp.hold;
-    if (!h.state && cs > h.t + W[1] * 1.5) { h.state = 'auto'; takeMiss(); if (P.dead) return; }   // missed the catch
-    if (h.state === 'held' && !holding && cs < h.end - 0.25) { h.state = 'dropped'; takeMiss(); if (P.dead) return; }   // let go too early
-    if (h.state === 'held' && cs >= h.end - 0.25) { h.state = 'done'; G.score += Math.round(300 * mult()); addPopup('HOLD!', '#ffd34d'); }
-    if (P.y >= rp.s && P.y <= rp.e) P.rope = { rp, t: (P.y - rp.s) / (rp.e - rp.s) };
-  }
   if (st > Song.buf.duration + 0.6) endRun(true);
 }
 
@@ -712,7 +689,7 @@ $('calibGo').onclick = e => { e.currentTarget.blur(); if (!Cal.running) calibSta
 $('calibBack').onclick = e => { e.currentTarget.blur(); showMenu(); };
 const pad = $('calibPad');
 pad.addEventListener('pointerdown', ev => { ev.preventDefault(); calibTap(ev.timeStamp); pad.classList.add('hit'); setTimeout(() => pad.classList.remove('hit'), 90); });
-window.__lof8 = { get G() { return G; }, get P() { return P; }, get track() { return track; }, Song, analyseSong, makeChart, builtinBuffer, prepareSong, startSong, tapAt, ropeAt, songNow, heardAt, yAt, Clock };
+window.__lof8 = { get G() { return G; }, get P() { return P; }, get track() { return track; }, Song, analyseSong, makeChart, builtinBuffer, prepareSong, startSong, tapAt, songNow, heardAt, yAt, Clock };
 
 // ---------- render ----------
 const anchor = () => H * (IS_TOUCH ? 0.48 : 0.72);
