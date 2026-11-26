@@ -98,7 +98,7 @@
       <button id="btnBuiltin"><b>Play: Darkness Road</b><small>MintoDog · built in</small></button>
       <button id="btnFile"><b>Play your own song</b><small>Pick a music file on this device</small></button>
     </div>
-    <input type="file" id="fileIn" accept="audio/*,.mp3,.m4a,.wav,.ogg,.aac,.flac" style="display:none">
+    <input type="file" id="fileIn" accept="audio/*,video/mp4,.mp3,.m4a,.mp4,.wav,.ogg,.aac,.flac" style="display:none">
     <p class="note" id="menuMsg" style="color:#e3342b;margin:4px 0 0"></p>
     <p class="note" style="margin-top:6px"><a id="calibLink" href="#">Timing check</a> · offset <span id="calibVal">0 ms</span></p>
     <p class="note" id="menuStats" style="margin-top:2px"></p>
@@ -529,8 +529,10 @@ function scoreHit(kind) {
   flashTap(kind);
 }
 function takeMiss() {
-  G.counts.miss++; G.combo = 0; G.streak = 0; G.health--;
+  G.counts.miss++; G.combo = 0; G.streak = 0;
   addPopup('MISS', '#ff5a4e'); sfx.miss();
+  if (G.flow) return;   // Flow has no fail state: a miss only costs your combo
+  G.health--;
   if (G.health <= 0) fall();
 }
 function judge(n, kind) {
@@ -641,7 +643,8 @@ function endRun(cleared) {
   if (cleared) stopSong(true);
   const c = G.counts, tot = c.perfect + c.good + c.miss, acc = tot ? (c.perfect + 0.6 * c.good) / tot : 0;   // Flow: every hit is full marks
   const grade = acc >= 0.95 ? 'S' : acc >= 0.88 ? 'A' : acc >= 0.75 ? 'B' : acc >= 0.6 ? 'C' : 'D';
-  const key = 'best:' + Song.key + ':' + G.diff, best = Math.max(load(key, 0), G.score); save(key, best);
+  const key = 'best:' + Song.key + ':' + G.diff, prevBest = load(key, 0), best = Math.max(prevBest, G.score); save(key, best);
+  const newBest = G.score > prevBest && G.score > 0;
   const pctDone = Math.round(clamp(G.songT / Song.buf.duration, 0, 1) * 100);
   const body = document.getElementById('resBody'), title = document.getElementById('resTitle'), btns = document.getElementById('resButtons');
   btns.innerHTML = '';
@@ -653,7 +656,7 @@ function endRun(cleared) {
     <tr><td>Accuracy</td><td>${Math.round(acc * 100)}%</td></tr>
     ${G.flow ? `<tr><td>Hits · Misses</td><td>${c.perfect} · ${c.miss}</td></tr>` : `<tr><td>Perfect · Good · Miss</td><td>${c.perfect} · ${c.good} · ${c.miss}</td></tr>`}
     <tr><td>Best combo</td><td>${G.maxCombo}</td></tr>
-    <tr class="total"><td>Best (${DIFF[G.diff].label})</td><td>${best.toLocaleString('en-IE')}</td></tr></table>`;
+    <tr class="total"><td>${newBest ? 'New best! 🎉' : 'Best (' + DIFF[G.diff].label + ')'}</td><td>${best.toLocaleString('en-IE')}</td></tr></table>`;
   btn('Change Song', showMenu); btn('Go Again', startSong, true);
   if (cleared) sfx.win();
   document.getElementById('result').classList.remove('hidden');
@@ -717,7 +720,7 @@ function updateMenuStats() {
   $('calibVal').textContent = (ms > 0 ? '+' : '') + ms + ' ms';
   $('menuStats').textContent = `Best on Darkness Road (${DIFF[curDiff].label}): ${load('best:builtin:' + curDiff, 0).toLocaleString('en-IE')}`;
   document.querySelectorAll('#diffSeg button').forEach(b => b.classList.toggle('on', b.dataset.d === curDiff));
-  $('howHealth').textContent = curDiff === 'flow' ? 'Three misses and the road gives way. No health back in Flow' : 'Three misses and the road gives way. Hits win health back';
+  $('howHealth').textContent = curDiff === 'flow' ? 'No fail in Flow: chase the highest score. A miss breaks your combo' : 'Three misses and the road gives way. Hits win health back';
   $('howTap').innerHTML = curDiff === 'flow' ? '<b>Flow:</b> no TAP. Steer onto every glowing tile, keep off the dark ones. Tap either side of the screen to move' : 'Tap <b>TAP</b> as you cross a glowing tile in your lane';
 }
 function showMenu() {
@@ -741,7 +744,7 @@ async function prepareSong(getBuf, name, key) {
     return true;
   } catch (e) {
     console.warn('Song failed', e);
-    showMenu(); $('menuMsg').textContent = 'Couldn’t read that song. Try an MP3, M4A or WAV file.';
+    showMenu(); $('menuMsg').textContent = 'Couldn’t read that song. Try an MP3, M4A, MP4 or WAV file. Songs bought or downloaded inside music apps are usually locked and won’t open.';
     return false;
   }
 }
@@ -909,7 +912,7 @@ function drawHUD() {
   ctx.font = '400 13px Space Grotesk, sans-serif'; ctx.fillStyle = HUD_SUB;
   const nm = Song.name.length > 22 ? Song.name.slice(0, 21) + '…' : Song.name;
   ctx.fillText((G.combo > 1 ? G.combo + ' combo · ' : '') + nm + ' · ' + DIFF[G.diff].label, 20, 82);
-  for (let i = 0; i < 3; i++) {   // health
+  if (!G.flow) for (let i = 0; i < 3; i++) {   // health (Flow has none: no fail state)
     ctx.beginPath(); ctx.arc(27 + i * 20, 100, 6.5, 0, Math.PI * 2);
     ctx.fillStyle = i < G.health ? RED : 'rgba(128,128,128,.35)'; ctx.fill();
   }
